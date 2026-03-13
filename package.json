@@ -1,6 +1,6 @@
 {
   "name": "mock-saml-idp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, PingFederate, Auth0, Google Workspace SSO integrations",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
