@@ -1,6 +1,6 @@
 # mock-saml-idp
 
-Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Auth0, Google Workspace, and PingFederate SSO integrations. No git-based dependencies.
+Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Auth0, Google Workspace, and PingFederate SSO integrations.
 
 ## Table of Contents
 
