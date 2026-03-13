@@ -1,36 +1,110 @@
 # mock-saml-idp
-Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Google Workspace SSO integrations. Zero git dependencies.
+
+Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Auth0, Google Workspace, and PingFederate SSO integrations. No git-based dependencies.
+
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start — Built-in Server](#quick-start--built-in-server)
+  - [CLI Usage](#cli-usage)
+  - [Server Endpoints](#server-endpoints)
+  - [Programmatic Server Usage](#programmatic-server-usage)
+- [Core API — MockSamlIdp Class](#core-api--mocksamlidp-class)
+  - [Creating an IdP Instance](#creating-an-idp-instance)
+  - [Generating a Key Pair](#generating-a-key-pair)
+  - [Metadata](#metadata)
+  - [Parsing Incoming SAML Requests](#parsing-incoming-saml-requests)
+  - [Creating AuthnResponses](#creating-authnresponses)
+  - [Creating LogoutResponses](#creating-logoutresponses)
+- [Provider-Specific Helpers](#provider-specific-helpers)
+  - [Azure AD](#azure-ad)
+  - [Okta](#okta)
+  - [OneLogin](#onelogin)
+  - [Auth0](#auth0)
+  - [Google Workspace](#google-workspace)
+  - [PingFederate](#pingfederate)
+- [Configuration Reference](#configuration-reference)
+  - [IdpConfig](#idpconfig)
+  - [SamlUser](#samluser)
+  - [ServerOptions](#serveroptions)
+- [Advanced Usage](#advanced-usage)
+  - [Custom Attributes](#custom-attributes)
+  - [Simulating Authentication Failures](#simulating-authentication-failures)
+  - [HTTP Bindings](#http-bindings)
+  - [Testing with Jest / Vitest](#testing-with-jest--vitest)
+- [TypeScript Types](#typescript-types)
+- [License](#license)
+
+---
+
+## Features
+
+- 🔐 Full SAML 2.0 IdP implementation — signed assertions and/or responses
+- 🌐 Built-in HTTP server with a web UI for interactive manual testing
+- 🧰 Provider presets for **Azure AD**, **Okta**, **OneLogin**, **Auth0**, **Google Workspace**, and **PingFederate**
+- 📦 Programmatic API for automated testing with Jest, Vitest, Mocha, etc.
+- 🔑 Automatic RSA key-pair generation (no pre-generated certificates required)
+- 🔄 Supports both **HTTP-POST** and **HTTP-Redirect** SAML bindings
+- 💬 Configurable NameID formats, signature algorithms, and attribute mappings
+- 🚫 No git-based dependencies — all dependencies are published npm packages
+
+---
+
+## Installation
+
+```bash
+npm install --save-dev mock-saml-idp
+# or
+yarn add --dev mock-saml-idp
+# or
+pnpm add --save-dev mock-saml-idp
+```
+
+---
 
 ## Quick Start — Built-in Server
 
-The package includes a built-in HTTP server with a web UI for manual testing. No extra setup required.
+### CLI Usage
+
+The package ships with a standalone HTTP server that you can start immediately for manual testing:
 
 ```bash
-# Start the server (default: http://localhost:7000)
+# Start on the default port (http://localhost:7000)
 npx mock-saml-idp
 
-# Or with custom port/host
+# Custom port and host
 PORT=8080 HOST=0.0.0.0 npx mock-saml-idp
 ```
 
-The server provides:
+Open your browser at `http://localhost:7000` to see the IdP landing page with:
 
-| Endpoint      | Description                                  |
-|---------------|----------------------------------------------|
-| `GET /`       | Landing page with IdP configuration and test form |
-| `GET /metadata` | SAML 2.0 IdP metadata XML                  |
-| `GET /sso`    | SSO endpoint (HTTP-Redirect binding)         |
-| `POST /sso`   | SSO endpoint (HTTP-POST binding)             |
-| `GET /slo`    | Single Logout endpoint                       |
+- The IdP Entity ID, SSO URL, SLO URL, and Metadata URL
+- The auto-generated X.509 certificate
+- A test form for sending a SAML response directly to any SP ACS URL
 
-### Programmatic Usage
+### Server Endpoints
+
+| Endpoint        | Method          | Description                                                    |
+|-----------------|-----------------|----------------------------------------------------------------|
+| `/`             | `GET`           | Landing page with IdP configuration and SP-initiated test form |
+| `/metadata`     | `GET`           | SAML 2.0 IdP metadata XML                                      |
+| `/sso`          | `GET`           | SSO endpoint — HTTP-Redirect binding (receives `SAMLRequest`)  |
+| `/sso`          | `POST`          | SSO endpoint — HTTP-POST binding (receives `SAMLRequest`)      |
+| `/sso/response` | `POST`          | Internal — processes the login form and posts SAMLResponse     |
+| `/sso/test`     | `POST`          | Direct SP test — sends SAMLResponse without an AuthnRequest    |
+| `/slo`          | `GET` / `POST`  | Single Logout endpoint                                         |
+
+### Programmatic Server Usage
+
+Use `startServer()` when you want to spin up the IdP inside automated tests or CI pipelines:
 
 ```typescript
 import { startServer } from 'mock-saml-idp';
 
 const { url, idp, close } = await startServer({
-  port: 7000,
-  host: 'localhost',
+  port: 7000,          // optional — defaults to 7000
+  host: 'localhost',   // optional — defaults to 'localhost'
   defaultUser: {
     nameId: 'testuser@example.com',
     firstName: 'Test',
@@ -39,6 +113,622 @@ const { url, idp, close } = await startServer({
 });
 
 console.log(`IdP running at ${url}`);
-// ... use idp instance for programmatic access ...
-await close(); // shut down when done
+// url      — base URL of the running server, e.g. "http://localhost:7000"
+// idp      — MockSamlIdp instance (for programmatic response generation)
+// close()  — async function to shut down the server
+
+await close();
 ```
+
+Pass `port: 0` to let the OS pick a free port automatically — useful when running tests in parallel:
+
+```typescript
+const { url, close } = await startServer({ port: 0 });
+// url will be something like "http://localhost:54321"
+```
+
+You can also override `idpConfig` to customise the IdP behaviour:
+
+```typescript
+import { startServer, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const { url, idp, close } = await startServer({
+  idpConfig: {
+    entityId: 'https://my-idp.example.com/saml',
+    privateKey,
+    certificate,
+    signResponse: true,
+    signAssertion: true,
+    signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+    nameIdFormat: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+  },
+});
+```
+
+---
+
+## Core API — MockSamlIdp Class
+
+Use `MockSamlIdp` directly when you need full control over request parsing and response generation without running a server.
+
+### Creating an IdP Instance
+
+```typescript
+import { MockSamlIdp, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = new MockSamlIdp({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+  ssoUrl: 'https://my-idp.example.com/saml/sso',
+  sloUrl: 'https://my-idp.example.com/saml/slo',
+  signAssertion: true,   // default: true
+  signResponse: false,   // default: false
+});
+```
+
+### Generating a Key Pair
+
+`generateKeyPair()` creates a self-signed RSA 2048-bit certificate suitable for testing:
+
+```typescript
+import { generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+// privateKey   — PEM-encoded RSA private key
+// certificate  — PEM-encoded X.509 self-signed certificate
+```
+
+You can also bring your own PEM-encoded key and certificate if you prefer.
+
+### Metadata
+
+Retrieve the IdP SAML 2.0 metadata XML to configure your Service Provider:
+
+```typescript
+const metadataXml = idp.getMetadata();
+
+// With optional parameters
+const metadataXml = idp.getMetadata({
+  wantAuthnRequestsSigned: false,
+  validUntil: new Date('2030-01-01'),
+  cacheDuration: 'PT1H',
+});
+```
+
+Point your SP to `http://localhost:7000/metadata` (when using the built-in server) or paste the XML directly.
+
+### Parsing Incoming SAML Requests
+
+#### AuthnRequest
+
+```typescript
+import { MockSamlIdp } from 'mock-saml-idp';
+
+// HTTP-Redirect binding (SAMLRequest query parameter, deflate-compressed + base64)
+const parsed = idp.parseAuthnRequest(
+  req.query.SAMLRequest,
+  'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect',
+);
+
+// HTTP-POST binding (SAMLRequest body field, plain base64)
+const parsed = idp.parseAuthnRequest(
+  req.body.SAMLRequest,
+  'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST',
+);
+
+console.log(parsed.id);        // request ID — use as inResponseTo
+console.log(parsed.issuer);    // SP Entity ID
+console.log(parsed.acsUrl);    // Assertion Consumer Service URL
+```
+
+#### LogoutRequest
+
+```typescript
+const parsed = idp.parseLogoutRequest(
+  req.query.SAMLRequest,
+  'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect',
+);
+
+console.log(parsed.nameId);       // user being logged out
+console.log(parsed.sessionIndex); // session to terminate
+```
+
+### Creating AuthnResponses
+
+#### HTTP-POST binding (most common)
+
+```typescript
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    firstName: 'Alice',
+    lastName: 'Smith',
+    email: 'alice@example.com',
+    groups: ['engineers', 'admins'],
+    attributes: {
+      department: 'Engineering',
+      employeeId: 'EMP-001',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+  inResponseTo: parsed.id,   // ID from the AuthnRequest
+  relayState: '/dashboard',
+});
+
+// response.type        — 'POST'
+// response.url         — ACS URL
+// response.samlResponse — base64-encoded SAMLResponse
+// response.relayState  — echoed relay state
+```
+
+#### HTTP-Redirect binding
+
+```typescript
+const response = idp.createRedirectResponse({
+  user: { nameId: 'alice@example.com' },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+  inResponseTo: parsed.id,
+});
+
+// response.url — full redirect URL with SAMLResponse query parameter
+// redirect the user's browser to response.url
+```
+
+#### Raw XML
+
+```typescript
+const xml = idp.createAuthnResponseXml({
+  user: { nameId: 'alice@example.com' },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+// xml — signed SAML assertion XML string
+```
+
+### Creating LogoutResponses
+
+```typescript
+// HTTP-POST
+const response = idp.createPostLogoutResponse({
+  nameId: 'alice@example.com',
+  sessionIndex: '_session123',
+  inResponseTo: parsed.id,
+});
+
+// HTTP-Redirect
+const response = idp.createRedirectLogoutResponse({
+  nameId: 'alice@example.com',
+  inResponseTo: parsed.id,
+  relayState: '/login',
+});
+```
+
+---
+
+## Provider-Specific Helpers
+
+Each provider subclass applies the correct default settings (NameID format, signing flags, attribute names) for its corresponding identity service, so you don't have to look them up.
+
+### Azure AD
+
+```typescript
+import { AzureAdProvider, AZURE_AD_CLAIM_URIS, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = AzureAdProvider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+// Use Azure AD claim URIs as attribute names
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      [AZURE_AD_CLAIM_URIS.email]:       'alice@example.com',
+      [AZURE_AD_CLAIM_URIS.givenName]:   'Alice',
+      [AZURE_AD_CLAIM_URIS.surname]:     'Smith',
+      [AZURE_AD_CLAIM_URIS.displayName]: 'Alice Smith',
+      [AZURE_AD_CLAIM_URIS.objectId]:    'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**Azure AD defaults:** `signAssertion: true`, `signResponse: false`, emailAddress NameID format.
+
+### Okta
+
+```typescript
+import { OktaProvider, OKTA_ATTRIBUTE_NAMES, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = OktaProvider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      [OKTA_ATTRIBUTE_NAMES.email]:     'alice@example.com',
+      [OKTA_ATTRIBUTE_NAMES.firstName]: 'Alice',
+      [OKTA_ATTRIBUTE_NAMES.lastName]:  'Smith',
+      [OKTA_ATTRIBUTE_NAMES.login]:     'alice',
+      [OKTA_ATTRIBUTE_NAMES.groups]:    'engineers',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**Okta defaults:** `signAssertion: true`, `signResponse: true`, emailAddress NameID format.
+
+### OneLogin
+
+```typescript
+import { OneLoginProvider, ONELOGIN_ATTRIBUTE_NAMES, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = OneLoginProvider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      [ONELOGIN_ATTRIBUTE_NAMES.email]:     'alice@example.com',
+      [ONELOGIN_ATTRIBUTE_NAMES.firstName]: 'Alice',
+      [ONELOGIN_ATTRIBUTE_NAMES.lastName]:  'Smith',
+      [ONELOGIN_ATTRIBUTE_NAMES.memberOf]:  'engineers',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**OneLogin defaults:** `signAssertion: true`, `signResponse: true`, emailAddress NameID format.
+
+### Auth0
+
+```typescript
+import { Auth0Provider, AUTH0_CLAIM_URIS, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = Auth0Provider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      [AUTH0_CLAIM_URIS.email]: 'alice@example.com',
+      [AUTH0_CLAIM_URIS.name]:  'Alice Smith',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**Auth0 defaults:** `signAssertion: false`, `signResponse: true`, emailAddress NameID format.
+
+### Google Workspace
+
+```typescript
+import { GoogleProvider, GOOGLE_ATTRIBUTE_NAMES, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = GoogleProvider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      [GOOGLE_ATTRIBUTE_NAMES.email]:     'alice@example.com',
+      [GOOGLE_ATTRIBUTE_NAMES.firstName]: 'Alice',
+      [GOOGLE_ATTRIBUTE_NAMES.lastName]:  'Smith',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**Google Workspace defaults:** `signAssertion: true`, `signResponse: false`, emailAddress NameID format.
+
+### PingFederate
+
+```typescript
+import { PingFederateProvider, PING_ATTRIBUTE_NAMES, generateKeyPair } from 'mock-saml-idp';
+
+const { privateKey, certificate } = generateKeyPair();
+
+const idp = PingFederateProvider.create({
+  entityId: 'https://my-idp.example.com/saml',
+  privateKey,
+  certificate,
+});
+
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice-persistent-id',
+    attributes: {
+      [PING_ATTRIBUTE_NAMES.email]:   'alice@example.com',
+      [PING_ATTRIBUTE_NAMES.uid]:     'alice',
+      [PING_ATTRIBUTE_NAMES.cn]:      'Alice Smith',
+      [PING_ATTRIBUTE_NAMES.subject]: 'alice@example.com',
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+**PingFederate defaults:** `signAssertion: true`, `signResponse: false`, persistent NameID format.
+
+---
+
+## Configuration Reference
+
+### IdpConfig
+
+| Field                 | Type                  | Default                                                                    | Description                                              |
+|-----------------------|-----------------------|----------------------------------------------------------------------------|----------------------------------------------------------|
+| `entityId`            | `string`              | **required**                                                               | IdP Entity ID URI                                        |
+| `privateKey`          | `string`              | **required**                                                               | PEM-encoded RSA private key                              |
+| `certificate`         | `string`              | **required**                                                               | PEM-encoded X.509 certificate (headers optional)         |
+| `signatureAlgorithm`  | `SignatureAlgorithm`  | `rsa-sha256`                                                               | XML signature algorithm                                  |
+| `digestAlgorithm`     | `DigestAlgorithm`     | `sha256`                                                                   | XML digest algorithm                                     |
+| `nameIdFormat`        | `NameIdFormat`        | `emailAddress`                                                             | Default NameID format                                    |
+| `issuer`              | `string`              | Same as `entityId`                                                         | Issuer value in SAML responses                           |
+| `ssoUrl`              | `string`              | —                                                                          | SSO endpoint URL                                         |
+| `sloUrl`              | `string`              | —                                                                          | Single Logout endpoint URL                               |
+| `signResponse`        | `boolean`             | `false`                                                                    | Sign the entire `<samlp:Response>` element               |
+| `signAssertion`       | `boolean`             | `true`                                                                     | Sign the `<saml:Assertion>` element                      |
+| `encryptAssertion`    | `boolean`             | `false`                                                                    | Encrypt the assertion (not yet implemented)              |
+| `authnContextClassRef`| `string`              | `PasswordProtectedTransport`                                               | AuthnContext class reference URI                         |
+| `sessionDuration`     | `number`              | `3600`                                                                     | Session validity in seconds                              |
+| `clockSkew`           | `number`              | `300`                                                                      | Allowed clock skew for time validation (seconds)         |
+
+### SamlUser
+
+| Field           | Type                              | Description                                         |
+|-----------------|-----------------------------------|-----------------------------------------------------|
+| `nameId`        | `string`                          | **required** — Subject NameID value                 |
+| `nameIdFormat`  | `NameIdFormat`                    | Overrides the IdP-level `nameIdFormat`              |
+| `sessionIndex`  | `string`                          | Session index included in the assertion             |
+| `attributes`    | `Record<string, string \| string[]>` | Arbitrary SAML attributes to include             |
+| `email`         | `string`                          | Shorthand — also sent as an attribute               |
+| `firstName`     | `string`                          | Shorthand — also sent as an attribute               |
+| `lastName`      | `string`                          | Shorthand — also sent as an attribute               |
+| `displayName`   | `string`                          | Shorthand — also sent as an attribute               |
+| `groups`        | `string[]`                        | Group membership list                               |
+| `roles`         | `string[]`                        | Role list                                           |
+
+### ServerOptions
+
+| Field         | Type                   | Default       | Description                                      |
+|---------------|------------------------|---------------|--------------------------------------------------|
+| `port`        | `number`               | `7000`        | TCP port. Use `0` for a random available port.   |
+| `host`        | `string`               | `'localhost'` | Host/IP to bind to                               |
+| `idpConfig`   | `Partial<IdpConfig>`   | —             | Overrides for the auto-generated IdP config      |
+| `defaultUser` | `Partial<SamlUser>`    | —             | Pre-fills the login form in the built-in UI      |
+
+---
+
+## Advanced Usage
+
+### Custom Attributes
+
+Pass any key/value pairs in the `attributes` field to include them as `<saml:Attribute>` elements:
+
+```typescript
+const response = idp.createPostResponse({
+  user: {
+    nameId: 'alice@example.com',
+    attributes: {
+      department:   'Engineering',
+      employeeId:   'EMP-001',
+      // multi-value attribute
+      permissions:  ['read', 'write', 'admin'],
+    },
+  },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+});
+```
+
+### Simulating Authentication Failures
+
+Pass a non-success `statusCode` to test how your SP handles SAML error responses:
+
+```typescript
+import { MockSamlIdp } from 'mock-saml-idp';
+
+const failResponse = idp.createPostResponse({
+  user: { nameId: 'blocked@example.com' },
+  spEntityId: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+  statusCode: 'urn:oasis:names:tc:SAML:2.0:status:AuthnFailed',
+  statusMessage: 'User account is disabled',
+});
+```
+
+Available status codes:
+
+| Status Code                                                  | Meaning                         |
+|--------------------------------------------------------------|---------------------------------|
+| `urn:oasis:names:tc:SAML:2.0:status:Success`                 | Successful authentication       |
+| `urn:oasis:names:tc:SAML:2.0:status:AuthnFailed`             | Authentication failed           |
+| `urn:oasis:names:tc:SAML:2.0:status:NoPassive`               | Passive auth not possible       |
+| `urn:oasis:names:tc:SAML:2.0:status:RequestDenied`           | Request was denied              |
+| `urn:oasis:names:tc:SAML:2.0:status:Requester`               | Request error (SP side)         |
+| `urn:oasis:names:tc:SAML:2.0:status:Responder`               | Response error (IdP side)       |
+| `urn:oasis:names:tc:SAML:2.0:status:VersionMismatch`         | Unsupported SAML version        |
+| `urn:oasis:names:tc:SAML:2.0:status:InvalidAttrNameOrValue`  | Invalid attribute value         |
+
+### HTTP Bindings
+
+Low-level binding utilities are exported for when you need to encode or decode SAML messages manually:
+
+```typescript
+import {
+  encodePostBinding,
+  decodePostBinding,
+  encodeRedirectBinding,
+  decodeRedirectBinding,
+  buildPostFormHtml,
+  buildRedirectUrl,
+} from 'mock-saml-idp';
+
+// Encode a SAMLRequest or SAMLResponse for HTTP-POST
+const base64 = encodePostBinding(xmlString);
+const xml    = decodePostBinding(base64);
+
+// Encode for HTTP-Redirect (deflate + base64 + URL-encode)
+const encoded = encodeRedirectBinding(xmlString);
+const xml     = decodeRedirectBinding(encoded);
+
+// Build an auto-submitting HTML form (HTTP-POST binding)
+const html = buildPostFormHtml(acsUrl, 'SAMLResponse', base64, relayState);
+
+// Build a redirect URL with the encoded SAMLResponse
+const url = buildRedirectUrl(acsUrl, 'SAMLResponse', xmlString, relayState);
+```
+
+### Testing with Jest / Vitest
+
+A typical integration test that starts the IdP, configures an SP, and verifies the SSO flow:
+
+```typescript
+import { startServer, generateKeyPair } from 'mock-saml-idp';
+
+let close: () => Promise<void>;
+let idpUrl: string;
+
+beforeAll(async () => {
+  const server = await startServer({
+    port: 0,  // random port
+    defaultUser: {
+      nameId: 'testuser@example.com',
+      firstName: 'Test',
+      lastName: 'User',
+    },
+  });
+  idpUrl = server.url;
+  close = server.close;
+});
+
+afterAll(() => close());
+
+test('metadata endpoint returns valid XML', async () => {
+  const res = await fetch(`${idpUrl}/metadata`);
+  expect(res.status).toBe(200);
+  const xml = await res.text();
+  expect(xml).toContain('IDPSSODescriptor');
+});
+
+test('generates a POST response for a user', async () => {
+  const { idp } = await startServer({ port: 0 });
+  const { privateKey, certificate } = generateKeyPair();
+
+  const localIdp = new (await import('mock-saml-idp')).MockSamlIdp({
+    entityId: 'https://idp.test',
+    privateKey,
+    certificate,
+  });
+
+  const response = localIdp.createPostResponse({
+    user: { nameId: 'alice@example.com' },
+    spEntityId: 'https://sp.test',
+    acsUrl: 'https://sp.test/acs',
+  });
+
+  expect(response.type).toBe('POST');
+  expect(response.samlResponse).toBeTruthy();
+});
+```
+
+You can also build test AuthnRequests programmatically using the exported helpers:
+
+```typescript
+import { buildMinimalAuthnRequest, buildMinimalLogoutRequest } from 'mock-saml-idp';
+
+// Build a base64-encoded AuthnRequest (POST binding)
+const samlRequest = buildMinimalAuthnRequest({
+  id: '_req1',
+  issuer: 'https://my-app.example.com',
+  acsUrl: 'https://my-app.example.com/saml/acs',
+  destination: `${idpUrl}/sso`,
+});
+
+// Build a base64-encoded LogoutRequest
+const logoutRequest = buildMinimalLogoutRequest({
+  id: '_logout1',
+  issuer: 'https://my-app.example.com',
+  nameId: 'alice@example.com',
+  sessionIndex: '_session123',
+});
+```
+
+---
+
+## TypeScript Types
+
+All types are exported from the package root:
+
+```typescript
+import type {
+  IdpConfig,
+  SamlUser,
+  AuthnRequestOptions,
+  LogoutRequestOptions,
+  ParsedAuthnRequest,
+  ParsedLogoutRequest,
+  SamlPostResponse,
+  SamlRedirectResponse,
+  SamlMetadataOptions,
+  SpMetadata,
+  NameIdFormat,
+  SignatureAlgorithm,
+  DigestAlgorithm,
+  SamlBinding,
+  StatusCode,
+} from 'mock-saml-idp';
+```
+
+---
+
+## License
+
+[MIT](./LICENSE)
