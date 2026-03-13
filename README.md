@@ -33,6 +33,15 @@ Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Aut
   - [Simulating Authentication Failures](#simulating-authentication-failures)
   - [HTTP Bindings](#http-bindings)
   - [Testing with Jest / Vitest](#testing-with-jest--vitest)
+- [Deploying for Remote Access](#deploying-for-remote-access)
+  - [Bind to All Interfaces](#bind-to-all-interfaces)
+  - [Docker](#docker)
+  - [Cloud Platforms](#cloud-platforms)
+  - [Behind a Reverse Proxy or Load Balancer](#behind-a-reverse-proxy-or-load-balancer)
+- [Using in UAT & Testing Environments](#using-in-uat--testing-environments)
+  - [Manual & UAT Testing with the Built-in UI](#manual--uat-testing-with-the-built-in-ui)
+  - [Automated Integration Testing](#automated-integration-testing)
+  - [Persistent UAT Setup](#persistent-uat-setup)
 - [TypeScript Types](#typescript-types)
 - [License](#license)
 
@@ -700,6 +709,275 @@ const logoutRequest = buildMinimalLogoutRequest({
   sessionIndex: '_session123',
 });
 ```
+
+---
+
+## Deploying for Remote Access
+
+The built-in server is designed for **testing use only** — do not expose it on a public
+endpoint without a firewall or authentication layer in front of it.
+
+### Bind to All Interfaces
+
+By default the server listens on `localhost` only. To make it reachable from other machines
+on the same network (or inside a container), bind to `0.0.0.0`:
+
+```bash
+HOST=0.0.0.0 PORT=7000 npx mock-saml-idp
+```
+
+When deployed behind a DNS name or public IP, also override the IdP URLs so that the
+SAML metadata and responses contain the correct externally-visible addresses:
+
+```bash
+HOST=0.0.0.0 \
+PORT=7000 \
+IDP_BASE_URL=https://mock-idp.your-team.example.com \
+npx mock-saml-idp
+```
+
+> **Tip:** `IDP_BASE_URL` is read by the CLI (`src/bin.ts`) and used as the base for
+> `entityId`, `ssoUrl`, and `sloUrl`. If your deployment already handles TLS termination
+> at a load balancer or reverse proxy, set this variable to the **public** HTTPS URL.
+
+### Docker
+
+A `Dockerfile` is included in the repository. Build and run a container with:
+
+```bash
+# Build the image
+docker build -t mock-saml-idp .
+
+# Run on port 7000 (localhost only — suitable for a single developer machine)
+docker run --rm -p 7000:7000 mock-saml-idp
+
+# Run with a custom external base URL (required when deploying to a shared server)
+docker run --rm \
+  -p 7000:7000 \
+  -e IDP_BASE_URL=https://mock-idp.your-team.example.com \
+  mock-saml-idp
+```
+
+Or with Docker Compose — create a `docker-compose.yml` in your project:
+
+```yaml
+version: "3.9"
+services:
+  mock-saml-idp:
+    build: .          # replace with 'image: your-registry/mock-saml-idp' if you push to a registry
+    ports:
+      - "7000:7000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "7000"
+      IDP_BASE_URL: "https://mock-idp.your-team.example.com"
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
+```
+
+### Cloud Platforms
+
+The container can be deployed to any platform that supports Docker images.
+Below are quick-start examples for common platforms.
+
+#### Render
+
+1. Push the repository (or your fork) to GitHub.
+2. Create a new **Web Service** on [Render](https://render.com), connect the repo, and
+   set the Docker environment.
+3. Set the environment variable `IDP_BASE_URL` to the Render-generated URL
+   (e.g. `https://mock-saml-idp.onrender.com`).
+4. Set the port to `7000`.
+
+#### Railway
+
+```bash
+# Install the Railway CLI and deploy in one command
+railway init
+railway up
+```
+
+Set `PORT` and `IDP_BASE_URL` in **Railway → Variables**.
+
+#### Heroku
+
+```bash
+heroku create mock-saml-idp
+heroku config:set IDP_BASE_URL=https://mock-saml-idp.herokuapp.com
+git push heroku main
+```
+
+The `Procfile` equivalent is already covered by `npm start` → `node dist/bin.js`.
+
+#### Any VPS / VM
+
+```bash
+# On the server
+git clone https://github.com/de-sadik/mock-saml-idp.git
+cd mock-saml-idp
+npm ci
+npm run build
+IDP_BASE_URL=https://mock-idp.your-team.example.com \
+HOST=0.0.0.0 PORT=7000 \
+node dist/bin.js
+```
+
+Use a process manager such as **pm2** or **systemd** to keep the process running:
+
+```bash
+npm install -g pm2
+IDP_BASE_URL=https://mock-idp.your-team.example.com \
+PORT=7000 pm2 start dist/bin.js --name mock-saml-idp
+pm2 save
+pm2 startup
+```
+
+### Behind a Reverse Proxy or Load Balancer
+
+When nginx, Caddy, or an AWS ALB terminates TLS in front of this server:
+
+1. Set `IDP_BASE_URL` to the **public HTTPS** URL (e.g. `https://mock-idp.corp.example.com`).
+2. Forward traffic to the container on port `7000`.
+3. Ensure the proxy passes the original `Host` header.
+
+Example nginx block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name mock-idp.corp.example.com;
+
+    ssl_certificate     /etc/ssl/certs/your-cert.pem;
+    ssl_certificate_key /etc/ssl/private/your-key.pem;
+
+    location / {
+        proxy_pass         http://localhost:7000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $remote_addr;
+        proxy_set_header   X-Forwarded-Proto https;
+    }
+}
+```
+
+---
+
+## Using in UAT & Testing Environments
+
+**Yes** — `mock-saml-idp` is well-suited for UAT (User Acceptance Testing), manual
+exploratory testing, and automated integration/end-to-end testing.
+
+### Manual & UAT Testing with the Built-in UI
+
+When deployed to a shared server (see [Deploying for Remote Access](#deploying-for-remote-access)),
+the built-in web UI lets testers and QA engineers:
+
+- View the IdP **Entity ID**, **SSO URL**, **SLO URL**, and **Metadata URL** at a glance.
+- Copy the auto-generated **X.509 certificate** to configure their Service Provider.
+- Fill in a form to **inject any test user** directly into an SP's ACS URL without needing
+  a real AuthnRequest — useful for testing specific attribute combinations or edge-case users.
+- Trigger the full **SP-initiated SSO flow** by initiating login from the SP; the IdP
+  shows a login form where any user identity can be entered.
+
+**Typical UAT workflow:**
+
+1. Deploy the IdP server to a shared test host (e.g. `https://mock-idp.uat.example.com`).
+2. Point your application's SAML SP settings to the IdP metadata URL:
+   `https://mock-idp.uat.example.com/metadata`.
+3. Open the application's login page → click "Login with SSO" → the browser is redirected
+   to the mock IdP.
+4. Fill in the test user's email, first name, and last name, then click **Sign In**.
+5. The IdP posts a signed SAML response back to the SP → you are logged in as that user.
+
+### Automated Integration Testing
+
+Use `startServer()` inside your test suite to spin up a real SAML IdP that your
+application under test can talk to over HTTP:
+
+```typescript
+import { startServer } from 'mock-saml-idp';
+
+let closeIdp: () => Promise<void>;
+let idpUrl: string;
+
+beforeAll(async () => {
+  const { url, close } = await startServer({
+    port: 0,             // random free port — avoids port conflicts in CI
+    defaultUser: {
+      nameId: 'uat-user@example.com',
+      firstName: 'UAT',
+      lastName: 'User',
+    },
+  });
+  idpUrl = url;
+  closeIdp = close;
+
+  // Point your application's SAML config to the test IdP
+  process.env.SAML_METADATA_URL = `${idpUrl}/metadata`;
+});
+
+afterAll(() => closeIdp());
+
+test('SSO login creates a session', async () => {
+  // … drive your SP through the full SAML flow using a headless browser
+  // (Playwright, Puppeteer, etc.) or by posting a SAMLResponse directly.
+});
+```
+
+**Why this is better than mocking at the library level:**
+
+- The SAML response is a **real signed XML document** — your SP's signature verification
+  code is exercised end-to-end.
+- The test runs against a live HTTP server, so network serialisation, redirects, and
+  cookie handling are all tested.
+- Works in **CI pipelines** (GitHub Actions, GitLab CI, Jenkins) with no external
+  dependencies.
+
+### Persistent UAT Setup
+
+For teams that need a long-lived IdP (e.g. shared across sprints):
+
+1. Generate and persist a key pair so the certificate stays stable across restarts:
+
+```typescript
+import { generateKeyPair } from 'mock-saml-idp';
+import fs from 'fs';
+
+// Run once and commit the output files (or store in a secrets manager)
+const { privateKey, certificate } = generateKeyPair();
+fs.writeFileSync('idp-private-key.pem', privateKey);
+fs.writeFileSync('idp-certificate.pem', certificate);
+```
+
+2. Start the server with the persisted credentials:
+
+```bash
+node -e "
+const { startServer } = require('mock-saml-idp');
+const fs = require('fs');
+startServer({
+  idpConfig: {
+    entityId: 'https://mock-idp.uat.example.com/metadata',
+    privateKey: fs.readFileSync('idp-private-key.pem', 'utf8'),
+    certificate: fs.readFileSync('idp-certificate.pem', 'utf8'),
+    ssoUrl: 'https://mock-idp.uat.example.com/sso',
+    sloUrl: 'https://mock-idp.uat.example.com/slo',
+  },
+  port: 7000,
+  host: '0.0.0.0',
+}).then(({ url }) => console.log('IdP running at', url));
+"
+```
+
+3. Configure your SP once with the stable metadata URL. The certificate will not change
+   between restarts, so you will not need to re-import it.
+
+> **Security note:** `mock-saml-idp` is intended for **non-production testing environments
+> only**. It does not authenticate users — anyone who can reach the login form can assert
+> any identity. Keep it behind a VPN or firewall, and never deploy it in front of
+> production data.
 
 ---
 
