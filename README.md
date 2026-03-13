@@ -56,7 +56,6 @@ Modern mock SAML 2.0 Identity Provider for testing Azure AD, Okta, OneLogin, Aut
 - 🔑 Automatic RSA key-pair generation (no pre-generated certificates required)
 - 🔄 Supports both **HTTP-POST** and **HTTP-Redirect** SAML bindings
 - 💬 Configurable NameID formats, signature algorithms, and attribute mappings
-- 🚫 No git-based dependencies — all dependencies are published npm packages
 
 ---
 
