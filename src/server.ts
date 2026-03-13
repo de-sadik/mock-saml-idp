@@ -235,15 +235,32 @@ function renderLoginPage(
 </html>`;
 }
 
+function buildUserFromForm(form: Record<string, string>, defaultUser: SamlUser): SamlUser {
+  return {
+    nameId: form['nameId'] || defaultUser.nameId,
+    email: form['nameId'] || defaultUser.email,
+    firstName: form['firstName'] || defaultUser.firstName,
+    lastName: form['lastName'] || defaultUser.lastName,
+    displayName: `${form['firstName'] || defaultUser.firstName} ${form['lastName'] || defaultUser.lastName}`,
+    attributes: {
+      email: form['nameId'] || defaultUser.email || '',
+      firstName: form['firstName'] || defaultUser.firstName || '',
+      lastName: form['lastName'] || defaultUser.lastName || '',
+    },
+  };
+}
+
 /**
  * Create and start a mock SAML IdP HTTP server with a built-in UI.
  */
 export async function startServer(options: ServerOptions = {}): Promise<ServerInstance> {
-  const port = options.port ?? 7000;
+  const requestedPort = options.port ?? 7000;
   const host = options.host ?? 'localhost';
-  const baseUrl = `http://${host}:${port}`;
 
   const { privateKey, certificate } = generateKeyPair();
+
+  // Use a mutable reference so the request handler always sees the resolved URL.
+  let baseUrl = `http://${host}:${requestedPort}`;
 
   const idpConfig: IdpConfig = {
     entityId: `${baseUrl}/metadata`,
@@ -353,19 +370,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerIn
       if (url.pathname === '/sso/response' && method === 'POST') {
         const body = await readBody(req);
         const form = parseFormBody(body);
-
-        const user: SamlUser = {
-          nameId: form['nameId'] || defaultUser.nameId,
-          email: form['nameId'] || defaultUser.email,
-          firstName: form['firstName'] || defaultUser.firstName,
-          lastName: form['lastName'] || defaultUser.lastName,
-          displayName: `${form['firstName'] || defaultUser.firstName} ${form['lastName'] || defaultUser.lastName}`,
-          attributes: {
-            email: form['nameId'] || defaultUser.email || '',
-            firstName: form['firstName'] || defaultUser.firstName || '',
-            lastName: form['lastName'] || defaultUser.lastName || '',
-          },
-        };
+        const user = buildUserFromForm(form, defaultUser);
 
         const samlResp = idp.createPostResponse({
           user,
@@ -390,19 +395,7 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerIn
       if (url.pathname === '/sso/test' && method === 'POST') {
         const body = await readBody(req);
         const form = parseFormBody(body);
-
-        const user: SamlUser = {
-          nameId: form['nameId'] || defaultUser.nameId,
-          email: form['nameId'] || defaultUser.email,
-          firstName: form['firstName'] || defaultUser.firstName,
-          lastName: form['lastName'] || defaultUser.lastName,
-          displayName: `${form['firstName'] || defaultUser.firstName} ${form['lastName'] || defaultUser.lastName}`,
-          attributes: {
-            email: form['nameId'] || defaultUser.email || '',
-            firstName: form['firstName'] || defaultUser.firstName || '',
-            lastName: form['lastName'] || defaultUser.lastName || '',
-          },
-        };
+        const user = buildUserFromForm(form, defaultUser);
 
         const samlResp = idp.createPostResponse({
           user,
@@ -449,7 +442,16 @@ export async function startServer(options: ServerOptions = {}): Promise<ServerIn
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);
-    server.listen(port, host, () => {
+    server.listen(requestedPort, host, () => {
+      const addr = server.address();
+      const actualPort = typeof addr === 'object' && addr ? addr.port : requestedPort;
+      baseUrl = `http://${host}:${actualPort}`;
+
+      // Update config URLs when port was dynamically assigned
+      if (!options.idpConfig?.entityId) idpConfig.entityId = `${baseUrl}/metadata`;
+      if (!options.idpConfig?.ssoUrl) idpConfig.ssoUrl = `${baseUrl}/sso`;
+      if (!options.idpConfig?.sloUrl) idpConfig.sloUrl = `${baseUrl}/slo`;
+
       resolve({
         server,
         url: baseUrl,

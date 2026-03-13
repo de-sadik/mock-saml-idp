@@ -44,10 +44,9 @@ function httpPost(
   });
 }
 
-// Use a unique port to avoid conflicts
-let nextPort = 17000;
+// Use port 0 to let the OS assign an available port, avoiding conflicts
 function getPort(): number {
-  return nextPort++;
+  return 0;
 }
 
 describe('Server', () => {
@@ -59,10 +58,9 @@ describe('Server', () => {
   });
 
   it('GET / returns landing page HTML', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpGet(`http://localhost:${port}/`);
+      const res = await httpGet(`${instance.url}/`);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toContain('text/html');
       expect(res.body).toContain('Mock SAML IdP');
@@ -74,10 +72,9 @@ describe('Server', () => {
   });
 
   it('GET /metadata returns valid XML metadata', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpGet(`http://localhost:${port}/metadata`);
+      const res = await httpGet(`${instance.url}/metadata`);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toContain('application/xml');
       expect(res.body).toContain('EntityDescriptor');
@@ -89,11 +86,9 @@ describe('Server', () => {
   });
 
   it('GET /sso without SAMLRequest redirects to landing page', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      // http.get doesn't follow redirects by default
-      const res = await httpGet(`http://localhost:${port}/sso`);
+      const res = await httpGet(`${instance.url}/sso`);
       expect(res.status).toBe(302);
       expect(res.headers['location']).toBe('/');
     } finally {
@@ -102,21 +97,20 @@ describe('Server', () => {
   });
 
   it('GET /sso with SAMLRequest shows login page', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
       const samlRequest = buildMinimalAuthnRequest({
         id: '_test123',
         issuer: 'https://sp.example.com',
         acsUrl: 'https://sp.example.com/acs',
-        destination: `http://localhost:${port}/sso`,
+        destination: `${instance.url}/sso`,
       });
 
       // Encode for redirect binding
       const encoded = encodeRedirectBinding(
         Buffer.from(samlRequest, 'base64').toString('utf8'),
       );
-      const url = `http://localhost:${port}/sso?SAMLRequest=${encoded}`;
+      const url = `${instance.url}/sso?SAMLRequest=${encoded}`;
       const res = await httpGet(url);
       expect(res.status).toBe(200);
       expect(res.body).toContain('Mock SAML Login');
@@ -127,8 +121,7 @@ describe('Server', () => {
   });
 
   it('POST /sso with SAMLRequest shows login page', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
       const samlRequest = buildMinimalAuthnRequest({
         id: '_testreq',
@@ -136,7 +129,7 @@ describe('Server', () => {
         acsUrl: 'https://sp.example.com/acs',
       });
       const body = `SAMLRequest=${encodeURIComponent(samlRequest)}`;
-      const res = await httpPost(`http://localhost:${port}/sso`, body);
+      const res = await httpPost(`${instance.url}/sso`, body);
       expect(res.status).toBe(200);
       expect(res.body).toContain('Mock SAML Login');
     } finally {
@@ -145,10 +138,9 @@ describe('Server', () => {
   });
 
   it('POST /sso without SAMLRequest returns 400', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpPost(`http://localhost:${port}/sso`, '');
+      const res = await httpPost(`${instance.url}/sso`, '');
       expect(res.status).toBe(400);
     } finally {
       await instance.close();
@@ -156,8 +148,7 @@ describe('Server', () => {
   });
 
   it('POST /sso/response sends SAML response back to SP', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
       const body = new URLSearchParams({
         acsUrl: 'https://sp.example.com/acs',
@@ -169,7 +160,7 @@ describe('Server', () => {
         relayState: '/dashboard',
       }).toString();
 
-      const res = await httpPost(`http://localhost:${port}/sso/response`, body);
+      const res = await httpPost(`${instance.url}/sso/response`, body);
       expect(res.status).toBe(200);
       expect(res.body).toContain('SAMLResponse');
       expect(res.body).toContain('https://sp.example.com/acs');
@@ -180,8 +171,7 @@ describe('Server', () => {
   });
 
   it('POST /sso/test sends SAML response for direct test', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
       const body = new URLSearchParams({
         acsUrl: 'https://sp.example.com/acs',
@@ -191,7 +181,7 @@ describe('Server', () => {
         lastName: 'User',
       }).toString();
 
-      const res = await httpPost(`http://localhost:${port}/sso/test`, body);
+      const res = await httpPost(`${instance.url}/sso/test`, body);
       expect(res.status).toBe(200);
       expect(res.body).toContain('SAMLResponse');
       expect(res.body).toContain('https://sp.example.com/acs');
@@ -201,10 +191,9 @@ describe('Server', () => {
   });
 
   it('GET /slo returns logged out page', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpGet(`http://localhost:${port}/slo`);
+      const res = await httpGet(`${instance.url}/slo`);
       expect(res.status).toBe(200);
       expect(res.body).toContain('Logged Out');
     } finally {
@@ -213,10 +202,9 @@ describe('Server', () => {
   });
 
   it('GET /unknown returns 404', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpGet(`http://localhost:${port}/unknown`);
+      const res = await httpGet(`${instance.url}/unknown`);
       expect(res.status).toBe(404);
     } finally {
       await instance.close();
@@ -224,9 +212,8 @@ describe('Server', () => {
   });
 
   it('respects custom defaultUser', async () => {
-    const port = getPort();
     const instance = await startServer({
-      port,
+      port: getPort(),
       defaultUser: {
         nameId: 'custom@test.com',
         firstName: 'Custom',
@@ -234,7 +221,7 @@ describe('Server', () => {
       },
     });
     try {
-      const res = await httpGet(`http://localhost:${port}/`);
+      const res = await httpGet(`${instance.url}/`);
       expect(res.body).toContain('custom@test.com');
       expect(res.body).toContain('Custom');
       expect(res.body).toContain('Tester');
@@ -244,12 +231,11 @@ describe('Server', () => {
   });
 
   it('metadata includes SSO and SLO service locations', async () => {
-    const port = getPort();
-    const instance = await startServer({ port });
+    const instance = await startServer({ port: getPort() });
     try {
-      const res = await httpGet(`http://localhost:${port}/metadata`);
-      expect(res.body).toContain(`http://localhost:${port}/sso`);
-      expect(res.body).toContain(`http://localhost:${port}/slo`);
+      const res = await httpGet(`${instance.url}/metadata`);
+      expect(res.body).toContain(`${instance.url}/sso`);
+      expect(res.body).toContain(`${instance.url}/slo`);
     } finally {
       await instance.close();
     }
