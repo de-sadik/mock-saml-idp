@@ -74,10 +74,8 @@ export function signXml(
 
 /**
  * Generate a self-signed RSA key pair for testing purposes.
- * Requires node-forge to be installed as a devDependency.
  */
 export function generateKeyPair(): { privateKey: string; certificate: string } {
-  // Dynamically require node-forge so it stays a devDependency
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const forge = require('node-forge') as typeof import('node-forge');
   const keypair = forge.pki.rsa.generateKeyPair(2048);
